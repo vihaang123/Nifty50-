@@ -1,0 +1,65 @@
+# Project settings. Paths are relative to this file's folder.
+
+data:
+  # Which data source to use.
+  #   local    -> reads a CSV/Parquet file (works now)
+  #   angelone -> Angel One SmartAPI (added in Phase 10, not implemented yet)
+  provider: local
+
+  # Development dataset. IT IS SYNTHETIC (random numbers, not real prices).
+  # Replace these two paths with real data files whenever you have them.
+  prices_file: data/raw/dev_prices_synthetic.csv
+  market_index_file: data/raw/dev_market_index_synthetic.csv
+
+  # Which symbols to use. null = every symbol found in the file.
+  # (The universe is whatever the file contains; it is not hard-coded.)
+  symbols: null
+
+  # Optional date window (YYYY-MM-DD). null = use everything in the file.
+  start_date: null
+  end_date: null
+
+pca:
+  # How many principal components to keep (try 3, 5 or 10). Can be overridden:
+  #   python -m src.pca_model --components 10
+  n_components: 5
+  output_file: data/processed/pca_features.csv
+  plots_dir: data/processed/plots
+
+lda:
+  # LDA always uses 2 components (number of classes - 1 = 3 - 1), so there is nothing to set here.
+  output_file: data/processed/lda_features.csv
+  plot_file: data/processed/plots/lda_scatter.png
+
+similarity:
+  # Reads the PCA output named in the pca section above (pca.output_file).
+  matrix_file: data/processed/similarity_matrix.csv
+  plots_dir: data/processed/plots
+
+basket:
+  # Reads the LDA output (lda.output_file) and the similarity matrix (similarity.matrix_file).
+  # Command-line flags override these: --basket-size 6 --capital 50000 --similarity-threshold 0.9
+  basket_size: 10
+  capital: 100000
+  # A candidate whose similarity with an already-selected stock is above this is penalised.
+  similarity_threshold: 0.90
+  output_file: data/processed/basket.csv
+  plot_file: data/processed/plots/basket_allocation.png
+
+backtest:
+  # Walk-forward backtest (Phase 7). Reads the same data files as the data section above.
+  # Command-line flags override these: --capital 50000 --basket-size 6 --frequency quarterly
+  capital: 100000
+  basket_size: 10
+  rebalance_frequency: quarterly   # monthly | quarterly | semiannual | annual
+  # A rebalance needs at least this many trading days of history BEFORE its date (60 are used up by the feature warm-up).
+  min_history_days: 252
+  n_components: 5
+  similarity_threshold: 0.90
+  start_date: null                 # optional: first allowed rebalance date (training still uses all earlier data)
+  end_date: null                   # optional: last day of the test
+  results_file: data/processed/backtest_results.csv
+  rebalance_file: data/processed/rebalance_history.csv
+  summary_file: data/processed/backtest_summary.json
+  equity_plot: data/processed/plots/backtest_equity_curve.png
+  drawdown_plot: data/processed/plots/backtest_drawdown.png

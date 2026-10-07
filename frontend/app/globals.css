@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Newsreader Variable", Georgia, "Times New Roman", serif;
+
+  --color-paper: #f3f5f4;
+  --color-surface: #ffffff;
+  --color-ink: #16202e;
+  --color-ink-2: #48525f;
+  --color-muted: #66717d;
+  --color-line: #dde2e6;
+  --color-line-strong: #c4ccd3;
+  --color-accent: #1f4a6e;
+  --color-accent-soft: #e6eef4;
+  --color-strategy: #2a6fb5;
+  --color-benchmark: #8a94a0;
+  --color-amber-ink: #7a4e00;
+  --color-amber-soft: #fbf1da;
+  --color-danger-ink: #9b2424;
+  --color-danger-soft: #fbeaea;
+  --color-good-ink: #1d6b45;
+}
+
+html { background: var(--color-paper); }
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.num { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
