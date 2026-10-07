@@ -4,12 +4,13 @@ import { ScreePlot } from "@/components/charts/ScreePlot";
 import { useDataset } from "@/components/layout/useDataset";
 import { usePcaSummary } from "@/components/dashboard/Summaries";
 import { Skeleton } from "@/components/common/states";
+import { describeDataSource } from "@/lib/dataSource";
 import { formatPercent } from "@/lib/utils";
 
 export default function LandingPage() {
   const dataset = useDataset();
   const pca = usePcaSummary();
-  const sourceText = dataset.data ? (dataset.data.is_synthetic ? "Synthetic" : dataset.data.source) : dataset.loading ? "checking..." : "unavailable (backend not reachable)";
+  const sourceText = dataset.data ? (dataset.data.is_synthetic ? "Synthetic" : describeDataSource(dataset.data).label) : dataset.loading ? "checking..." : "unavailable (backend not reachable)";
 
   return (
     <div className="grid items-center gap-10 py-4 lg:grid-cols-2 lg:py-10">

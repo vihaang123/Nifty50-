@@ -24,11 +24,11 @@ Historical data -> Features -> PCA -> LDA -> Similarity -> Selection -> Basket -
 - [x] Phase 8A: FastAPI backend
 - [x] Phase 8B: Next.js frontend
 - [x] Phase 8C: Production deployment and integration
-- [ ] Phase 8D: Production hardening / next deployment phase
+- [x] Phase 8D: Production hardening and live-data preparation (data provider architecture)
 - [ ] Phase 8E: Angel One / live market data integration
 - [ ] Phase 9: testing and cleanup
 
-Phase 8C is frozen: this repository's `main` branch is the source of truth for what is deployed.
+Phase 8C is frozen: this repository's `main` branch is the source of truth for what is deployed. Phase 8D made the data source swappable (see Data Provider Architecture below) without changing the research engine or connecting any broker.
 
 ## Production deployment (Phase 8C)
 
@@ -54,7 +54,9 @@ Vercel
   |
 FastAPI                     (api/, entry point index.py, Vercel)
   |
-Existing Python Research Engine   (src/, unchanged since Phase 7)
+DataProvider                (src/data_loader.py, chosen by DATA_PROVIDER)
+  |
+Existing Python Research Engine   (src/, the methodology is unchanged since Phase 7)
   |
 Features
   |
@@ -67,7 +69,7 @@ Basket Construction
 Walk-Forward Backtesting
 ```
 
-The data source feeding the engine is currently the synthetic dataset in `data/raw/`.
+The data source feeding the engine is currently the synthetic dataset in `data/raw/`, supplied by the local provider.
 
 ### Vercel project settings
 
@@ -91,8 +93,9 @@ Set these in each Vercel project's settings. They are never committed, and the f
 | Frontend | `NEXT_PUBLIC_API_URL` | `https://nifty50-api.vercel.app` |
 | Backend | `ENVIRONMENT` | `production` |
 | Backend | `FRONTEND_ORIGIN` | `https://nifty50-frontend.vercel.app` |
+| Backend | `DATA_PROVIDER` | `local` |
 
-`NEXT_PUBLIC_API_URL` is read at build time, so changing it needs a frontend redeploy. In production the backend refuses a wildcard origin and will not start without `FRONTEND_ORIGIN`. If the frontend moves to another domain, update `FRONTEND_ORIGIN` to that exact origin (no trailing slash) and redeploy the backend. For local development use the values in `.env.example` and `frontend/.env.example`.
+`DATA_PATH` is optional and not set in production (the API uses the price file named in `config.yaml`). `NEXT_PUBLIC_API_URL` is read at build time, so changing it needs a frontend redeploy. In production the backend refuses a wildcard origin and will not start without `FRONTEND_ORIGIN`. If the frontend moves to another domain, update `FRONTEND_ORIGIN` to that exact origin (no trailing slash) and redeploy the backend. For local development use the values in `.env.example` and `frontend/.env.example`.
 
 ### Requirements files
 
@@ -110,6 +113,109 @@ Vercel installs `requirements.txt` only. `uvicorn` stays in it because it is how
 - CORS allows only the exact frontend origin above, so a custom domain needs a `FRONTEND_ORIGIN` update.
 - Vercel's team-scoped preview URLs are behind Vercel Authentication; the two production URLs above are public.
 - Light theme only.
+
+## Data Provider Architecture
+
+The research engine does not know where its prices come from. It asks a **DataProvider** for one standard table, and everything after that (features, PCA, LDA, similarity, basket, backtest) works on that table.
+
+```
+FastAPI
+   |
+DataProvider                       get_provider(...) in src/data_loader.py
+   |
++----------------------------------+
+| LocalDataProvider    (active)    |   reads a CSV / Parquet file
+| Angel One provider   (Phase 8E)  |   represented, NOT implemented
++----------------------------------+
+   |
+Standardized OHLCV table           date, symbol, open, high, low, close, volume
+   |
+Existing research pipeline         unchanged
+```
+
+| | |
+|---|---|
+| **Current provider** | Local / Synthetic: `LocalDataProvider` reading `data/raw/dev_prices_synthetic.csv` |
+| **Future provider** | Angel One SmartAPI, planned for Phase 8E. It is not installed, not connected and has no credentials anywhere in this repository |
+| **Default** | `DATA_PROVIDER=local` |
+
+Because every provider returns the same table, adding Angel One in Phase 8E means writing one new provider class. The research engine, the API routes and the frontend do not change.
+
+### The interface (`src/data_loader.py`)
+
+There is one abstraction, `DataProvider`, and one factory, `get_provider`. Phase 8D extended them; it did not add a second system.
+
+| Item | Behaviour |
+|---|---|
+| Required method | `get_historical_data(symbols=None, start=None, end=None)` returns the standard table |
+| Identity | `name` (for example `local`) and `is_synthetic`, both reported by the API |
+| Readiness | `check_available()` is a cheap check used by `/api/health`; it does not parse the data |
+| Return format | exactly `date, symbol, open, high, low, close, volume`; `date` is a daily datetime with no time or timezone; `symbol` is upper-case text; prices and volume are finite floats; sorted by symbol then date; one row per (symbol, date) |
+| Symbols | matched case-insensitively and trimmed; an unknown symbol raises `ValueError` naming it |
+| Dates | `start` and `end` are inclusive; start after end, or an empty window, raises `ValueError` |
+| Validation | never loosened: prices must be above 0, volume 0 or more, high at or above low, open and close; broken data raises `DataValidationError` and is never repaired silently |
+| Missing data | handled explicitly, not invented: a row with no close price is dropped, missing open/high/low is rebuilt from open and close, missing volume becomes 0, and nothing is forward-filled or back-filled |
+
+### Choosing a provider
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `DATA_PROVIDER` | `local` or `angel_one` | unset, which means `config.yaml`, which says `local` |
+| `DATA_PATH` | price file for the local provider; a relative path starts at the project root | unset, which means `config.yaml`'s `prices_file` |
+
+`DATA_PROVIDER` beats `config.yaml`'s `data.provider`. Neither file nor environment ever holds credentials.
+
+There is **no silent fallback**:
+
+| If you set | The data endpoints answer |
+|---|---|
+| `DATA_PROVIDER=angel_one` | `503` `data_provider_not_implemented`: the Angel One provider is not implemented yet (Phase 8E) |
+| `DATA_PROVIDER=unknown` | `503` `data_provider_not_configured`: lists the supported values |
+| a `DATA_PATH` that does not exist | `503` `data_unavailable` (the message never contains the path) |
+| a file with impossible data | `503` `data_invalid` (nothing is served) |
+
+A wrong setting does not stop the API from starting. `/api/health` still answers `200` and says what is wrong.
+
+### What the API reports
+
+`GET /api/health`:
+
+```json
+{ "status": "ok", "service": "stock-basket-api", "version": "1.0.0", "environment": "production",
+  "data": { "provider": "local", "available": true, "is_synthetic": true, "message": null } }
+```
+
+`status` is `ok` when the API and its data are ready, and `degraded` when the API is up but the data provider is not. It never exposes paths, environment variables or credentials.
+
+`GET /api/dataset` now includes `provider` and `observations` (stock-day rows loaded) next to `is_synthetic`, `start_date`, `end_date`, `stocks`, `stock_count` and `trading_days`:
+
+```json
+{ "provider": "local", "source": "synthetic", "is_synthetic": true, "observations": 20880, "...": "..." }
+```
+
+The frontend labels the source from this response: "Synthetic Research Dataset" today. If a later provider reports `angel_one`, the same code would read "Angel One"; nothing enables that now, and the UI never says "live".
+
+### Error handling
+
+| Situation | Status |
+|---|---|
+| invalid input (capital 0 or below, basket size 2, bad date, unknown field, start after end) | `422` |
+| unknown stock or route | `404` |
+| a valid request that cannot be served (basket larger than the universe, no possible rebalance in the window) | `400` |
+| data or provider configuration unavailable | `503` |
+| anything unexpected | `500`, a generic message; the traceback goes only to the server log |
+
+Every error uses the same `{"error": {"status", "code", "message"}}` body. None contains a traceback, a file path or an environment value.
+
+### Caching
+
+The loaded data and the fitted exploratory models are cached in memory, keyed by the full data source: config file, provider and data path. Changing any of them can never return an object built from different data, and a failed provider is not cached, so fixing the setting works without a restart. There is no Redis and no other cache.
+
+### Provider contract tests
+
+`tests/test_data_provider_contract.py` holds `ProviderContract`, written against the abstract interface only. It checks the columns, the date and symbol types, the numeric types, impossible OHLC values, negative volume, ordering, symbol and date handling, missing-data behaviour, unknown symbols and rejection of broken data. The local provider passes it (`TestLocalProviderContract`). In Phase 8E the Angel One provider gets its own subclass with two fixtures and must pass the same tests.
+
+`tests/conftest.py` pins every test to `DATA_PROVIDER=local` and clears the Angel One variable names, so no test can reach a real data provider.
 
 ## Quick start
 
@@ -771,8 +877,8 @@ api/
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/health` | Health check |
-| GET | `/api/dataset` | Dataset information (`is_synthetic`, dates, stocks, trading days) |
+| GET | `/api/health` | Health check (`status` ok or degraded, `environment`, and a `data` block with provider, availability and `is_synthetic`) |
+| GET | `/api/dataset` | Dataset information (`provider`, `is_synthetic`, dates, stocks, trading days, `observations`) |
 | GET | `/api/universe` | Stock universe with cap categories |
 | GET | `/api/analysis/pca` | PCA analysis (`?components=5&max_points=2000`) |
 | GET | `/api/analysis/lda` | LDA analysis (`?max_points=2000`) |
@@ -814,6 +920,7 @@ Every error has the same shape and never contains a traceback or internal detail
 | 404 | Unknown stock symbol, unknown route | `unknown_symbol`, `not_found` |
 | 405 | Wrong HTTP method | `method_not_allowed` |
 | 422 | Invalid parameters: capital <= 0, basket_size < 3 or not a whole number, threshold outside -1..1, bad frequency or date, unknown fields (with the offending field names in `details`) | `invalid_request` |
+| 503 | Data or provider configuration unavailable (see Data Provider Architecture) | `data_provider_not_implemented`, `data_provider_not_configured`, `data_unavailable`, `data_invalid` |
 | 500 | Anything unexpected (the traceback is only in the server log) | `internal_error` |
 
 ### CORS and environment variables
@@ -916,7 +1023,7 @@ frontend/
 
 ### Tests
 
-`npm test` runs 47 Vitest tests: the API client (URL from the environment, caching, error shapes, no credentials), dashboard rendering and the click-only backtest, basket validation and result rendering, backtest loading and result rendering, and API error handling (backend down, 422, 400, 404, 500). Fixtures are real backend responses. Tests were checked by breaking the code on purpose and confirming a test fails.
+`npm test` runs 58 Vitest tests: the API client (URL from the environment, caching, error shapes, no credentials), dashboard rendering and the click-only backtest, basket validation and result rendering, backtest loading and result rendering, and API error handling (backend down, 422, 400, 404, 500). Fixtures are real backend responses. Tests were checked by breaking the code on purpose and confirming a test fails.
 
 ### Limitations
 
@@ -936,7 +1043,7 @@ provider = get_provider(config)                       # reads config.yaml
 df = provider.get_historical_data(symbols, start, end)
 ```
 
-`LocalDataProvider` works now. In Phase 8E we add `AngelOneDataProvider`, which returns the same table, then change `provider: local` to `provider: angelone` in `config.yaml`. No ML code changes. Credentials go in a git-ignored `.env` file (see `.env.example`); they are never needed before Phase 8E.
+`LocalDataProvider` works now. In Phase 8E we add `AngelOneDataProvider`, which returns the same table, then set `DATA_PROVIDER=angel_one` (or `data.provider: angel_one` in `config.yaml`). Until then that setting gives a clear "not implemented" error (503) and never falls back to local data. No ML code changes; the new provider must pass `tests/test_data_provider_contract.py`. Credentials go in a git-ignored `.env` file (see `.env.example`); they are never needed before Phase 8E.
 
 ## Honest limitations (to be kept in the final report)
 

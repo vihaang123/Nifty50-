@@ -9,8 +9,9 @@ What this file does, in plain words
 
 2. Defines a `DataProvider` interface: "something that can give me that table".
    - `LocalDataProvider` reads a CSV/Parquet file (used now).
-   - `AngelOneDataProvider` will be added in Phase 10. It will return the SAME
-     table, so no machine-learning code has to change when we switch.
+   - An Angel One provider is planned for Phase 8E. It will return the SAME
+     table, so no machine-learning code has to change when we switch. Until
+     then `get_provider` refuses to build it (it never falls back to local data).
 
 3. Cleans and validates the table so later phases can trust it.
 
@@ -35,6 +36,31 @@ NUMERIC_COLUMNS = PRICE_COLUMNS + ["volume"]
 
 class DataValidationError(ValueError):
     """Raised when the data is broken in a way we refuse to guess our way around."""
+
+
+class ProviderConfigurationError(ValueError):
+    """Raised when the requested data provider does not exist (for example DATA_PROVIDER=yahoo)."""
+
+
+class ProviderNotImplementedError(NotImplementedError):
+    """Raised when a provider is known but not built yet (Angel One, until Phase 8E). Never replaced by local data."""
+
+
+class DataUnavailableError(RuntimeError):
+    """Raised by `DataProvider.check_available()` when a provider cannot currently supply data."""
+
+
+# Provider names accepted by `get_provider`. "local" is the default. "angel_one" is reserved for Phase 8E.
+PROVIDER_LOCAL = "local"
+PROVIDER_ANGEL_ONE = "angel_one"
+KNOWN_PROVIDERS = (PROVIDER_LOCAL, PROVIDER_ANGEL_ONE)
+_PROVIDER_ALIASES = {"angelone": PROVIDER_ANGEL_ONE}  # the spelling config.yaml used before Phase 8D
+
+
+def normalize_provider_name(name: object) -> str:
+    """'  Local ' -> 'local', 'angelone' -> 'angel_one'. An empty value means "use the default" and returns ''."""
+    text = str(name or "").strip().lower()
+    return _PROVIDER_ALIASES.get(text, text)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +221,26 @@ class DataProvider(ABC):
 
     The rest of the project only ever calls `get_historical_data(...)`. It does
     not know or care where the numbers came from.
+
+    THE PROVIDER CONTRACT (tests/test_data_provider_contract.py checks every item for a provider):
+      * returns exactly REQUIRED_COLUMNS, in that order
+      * date: datetime64 with no time of day and no timezone; symbol: upper-case text
+      * open/high/low/close/volume: finite float64 (no missing values)
+      * prices > 0, volume >= 0, high >= max(open, close, low), low <= min(open, close)
+      * sorted by symbol then date, one row per (symbol, date)
+      * symbols are matched case-insensitively; an unknown symbol raises ValueError
+      * start/end are inclusive; start after end, or nothing left in the window, raises ValueError
+      * broken data raises DataValidationError (it is never silently repaired); a row with no close price
+        is absent from the result (a price is never invented)
     """
+
+    # Short identifier reported by the API (`provider` in /api/dataset and /api/health).
+    name: str = "unknown"
+    # True only for generated development data. Real sources keep the default.
+    is_synthetic: bool = False
+
+    def check_available(self) -> None:
+        """Cheap readiness check used by /api/health. Raise DataUnavailableError if data cannot be supplied. Default: ready."""
 
     @abstractmethod
     def get_historical_data(
@@ -219,9 +264,20 @@ class DataProvider(ABC):
 class LocalDataProvider(DataProvider):
     """Reads prices from a local CSV/Parquet file."""
 
+    name = PROVIDER_LOCAL
+
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.last_cleaning_report: dict = {}
+
+    @property
+    def is_synthetic(self) -> bool:  # type: ignore[override]
+        """The development files are generated; they are recognised by 'synthetic' in the file name."""
+        return "synthetic" in self.path.name.lower()
+
+    def check_available(self) -> None:
+        if not self.path.is_file():
+            raise DataUnavailableError("The configured price file was not found.")
 
     def get_historical_data(self, symbols=None, start=None, end=None) -> pd.DataFrame:
         raw = read_price_file(self.path)
@@ -249,16 +305,34 @@ class LocalDataProvider(DataProvider):
         return df.reset_index(drop=True)
 
 
-def get_provider(config: dict, base_dir: str | Path = ".") -> DataProvider:
-    """Build the data provider named in config.yaml (data.provider)."""
-    name = str(config["data"].get("provider", "local")).lower()
-    if name == "local":
-        return LocalDataProvider(Path(base_dir) / config["data"]["prices_file"])
-    if name == "angelone":
-        raise NotImplementedError(
-            "AngelOneDataProvider is planned for Phase 10. Use provider: local for now."
+def get_provider(
+    config: dict,
+    base_dir: str | Path = ".",
+    provider: str | None = None,
+    data_path: str | Path | None = None,
+) -> DataProvider:
+    """
+    Build the data provider (the single provider-selection point for the whole project).
+
+    provider   overrides config.yaml's data.provider (the API passes the DATA_PROVIDER environment variable here).
+               None or empty means "use config.yaml", which defaults to "local".
+    data_path  overrides config.yaml's data.prices_file for the local provider (the API passes DATA_PATH). A relative
+               path is resolved against base_dir (the project root), an absolute path is used as given.
+
+    There is no silent fallback: an unknown name raises ProviderConfigurationError, and "angel_one" raises
+    ProviderNotImplementedError until Phase 8E. Neither ever returns local data instead.
+    """
+    name = normalize_provider_name(provider) or normalize_provider_name(config["data"].get("provider")) or PROVIDER_LOCAL
+    if name == PROVIDER_LOCAL:
+        chosen = Path(data_path) if data_path else Path(config["data"]["prices_file"])
+        return LocalDataProvider(chosen if chosen.is_absolute() else Path(base_dir) / chosen)
+    if name == PROVIDER_ANGEL_ONE:
+        raise ProviderNotImplementedError(
+            "The Angel One data provider is not implemented yet (planned for Phase 8E). "
+            "Set DATA_PROVIDER=local, or leave it unset, to use the local dataset."
         )
-    raise ValueError(f"Unknown data provider '{name}'. Use 'local' (or 'angelone' in Phase 10).")
+    shown = name if len(name) <= 40 else name[:40] + "..."
+    raise ProviderConfigurationError(f"Unknown data provider '{shown}'. Supported values: {', '.join(KNOWN_PROVIDERS)}.")
 
 
 def load_config(path: str | Path = "config.yaml") -> dict:

@@ -1,0 +1,1 @@
+{"status": "ok", "service": "stock-basket-api", "version": "1.0.0", "environment": "development", "data": {"provider": "local", "available": true, "is_synthetic": true, "message": null}}

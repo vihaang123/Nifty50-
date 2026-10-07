@@ -3,6 +3,7 @@ import { ErrorState, LoadingBlock } from "@/components/common/states";
 import { Panel, StatCard, Swatch } from "@/components/common/ui";
 import { getDataset, getLDA, getPCA, getUniverse } from "@/lib/api";
 import { BEHAVIOR_ORDER, CAP_ORDER, behaviorColor } from "@/lib/colors";
+import { describeDataSource } from "@/lib/dataSource";
 import { useRequest } from "@/lib/hooks";
 import { describeError, formatDate, formatInteger, formatPercent, formatPercentPoints } from "@/lib/utils";
 
@@ -32,7 +33,7 @@ export function DatasetCard() {
           <Row label="Trading days" value={formatInteger(dataset.data.trading_days)} />
           <Row label="Date range" value={`${formatDate(dataset.data.start_date)} to ${formatDate(dataset.data.end_date)}`} />
           <Row label="Observations" value={pca.data ? formatInteger(pca.data.total_observations) : pca.loading ? "Loading..." : "n/a"} />
-          <Row label="Data source" value={dataset.data.is_synthetic ? "Synthetic Research Dataset" : dataset.data.source} />
+          <Row label="Data source" value={describeDataSource(dataset.data).label} />
           <p className="mt-3 text-sm text-muted">Observations are stock-day feature rows after the warm-up period needed to compute the features.</p>
         </div>
       )}

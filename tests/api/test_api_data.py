@@ -18,7 +18,10 @@ def test_dataset_structure(client):
     response = client.get("/api/dataset")
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"source", "is_synthetic", "start_date", "end_date", "stock_count", "stocks", "trading_days", "market_index", "notice"}
+    assert set(body) == {
+        "provider", "source", "is_synthetic", "start_date", "end_date", "stock_count", "stocks", "trading_days", "observations",
+        "market_index", "notice",
+    }
     assert isinstance(body["stocks"], list) and all(isinstance(s, str) for s in body["stocks"])
 
 

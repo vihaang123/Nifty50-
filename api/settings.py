@@ -4,7 +4,13 @@ Runtime settings, read from environment variables (never from code, never from t
   FRONTEND_ORIGIN   allowed browser origin(s) for CORS, comma separated.  Default: http://localhost:3000
   ENVIRONMENT       development (default) or production.  In production a wildcard origin is refused.
   CONFIG_PATH       optional path to config.yaml.  Default: the project's config.yaml
+  DATA_PROVIDER     which data provider to use: local (default) or angel_one (not implemented until Phase 8E).
+                    Unset means "whatever config.yaml says", which is local.
+  DATA_PATH         optional price file for the local provider. A relative path starts at the project root.
+                    Unset means config.yaml's data.prices_file.
 
+The two data variables are only read here, never validated here: a wrong provider must not stop the API from starting.
+The data endpoints answer 503 with a clear message instead, and /api/health reports it.
 The Angel One credentials listed in .env.example are deliberately NOT read anywhere yet (Phase 8E).
 """
 
@@ -14,6 +20,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FRONTEND_ORIGIN = "http://localhost:3000"
@@ -25,6 +32,8 @@ class Settings:
     environment: str
     frontend_origins: tuple
     config_path: Path
+    data_provider: Optional[str] = None  # DATA_PROVIDER; None = use config.yaml
+    data_path: Optional[str] = None      # DATA_PATH; None = use config.yaml
 
 
 def parse_origins(raw: str) -> tuple:
@@ -51,4 +60,9 @@ def get_settings() -> Settings:
     if environment == "production" and ("*" in origins or not origins):
         raise RuntimeError("In production FRONTEND_ORIGIN must list the exact frontend origin(s); '*' is not allowed.")
     config_path = Path(os.environ.get("CONFIG_PATH") or PROJECT_ROOT / "config.yaml").resolve()
-    return Settings(environment=environment, frontend_origins=origins, config_path=config_path)
+    data_provider = os.environ.get("DATA_PROVIDER", "").strip() or None
+    data_path = os.environ.get("DATA_PATH", "").strip() or None
+    return Settings(
+        environment=environment, frontend_origins=origins, config_path=config_path,
+        data_provider=data_provider, data_path=data_path,
+    )

@@ -24,7 +24,10 @@ ORIGIN = "http://localhost:3000"
 def test_health_returns_200_and_the_exact_body(client):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "stock-basket-api", "version": "1.0.0"}
+    assert response.json() == {
+        "status": "ok", "service": "stock-basket-api", "version": "1.0.0", "environment": "development",
+        "data": {"provider": "local", "available": True, "is_synthetic": True, "message": None},
+    }
     assert SERVICE_NAME == "stock-basket-api" and API_VERSION == "1.0.0"
     assert response.headers["content-type"].startswith("application/json")
 
@@ -131,10 +134,11 @@ def test_the_allowed_origin_comes_from_the_environment(monkeypatch):
 
 # ===================== settings =====================
 def test_default_settings_are_the_development_ones(monkeypatch):
-    for name in ("FRONTEND_ORIGIN", "ENVIRONMENT", "CONFIG_PATH"):
+    for name in ("FRONTEND_ORIGIN", "ENVIRONMENT", "CONFIG_PATH", "DATA_PROVIDER", "DATA_PATH"):
         monkeypatch.delenv(name, raising=False)
     s = get_settings()
     assert s.environment == "development" and s.frontend_origins == (ORIGIN,) and s.config_path == ROOT / "config.yaml"
+    assert s.data_provider is None and s.data_path is None  # unset means "use config.yaml", which is local
 
 
 def test_production_refuses_a_wildcard_origin(monkeypatch):

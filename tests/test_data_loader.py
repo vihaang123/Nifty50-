@@ -194,7 +194,8 @@ def test_provider_errors_are_clear(csv_path, tmp_path):
 
 def test_provider_factory():
     assert isinstance(get_provider({"data": {"provider": "local", "prices_file": "a.csv"}}), LocalDataProvider)
-    with pytest.raises(NotImplementedError, match="Phase 10"):
+    # Phase 8D: Angel One moved from "Phase 10" to Phase 8E, and "angelone" is now an alias of "angel_one".
+    with pytest.raises(NotImplementedError, match="Phase 8E"):
         get_provider({"data": {"provider": "angelone"}})
     with pytest.raises(ValueError, match="Unknown"):
         get_provider({"data": {"provider": "yahoo"}})

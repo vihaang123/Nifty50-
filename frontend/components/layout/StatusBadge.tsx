@@ -1,5 +1,6 @@
 "use client";
 import { useDataset } from "./useDataset";
+import { describeDataSource } from "@/lib/dataSource";
 import { cn } from "@/lib/utils";
 
 /** The data-source indicator. It is driven by the API response, never hard-coded. */
@@ -9,9 +10,10 @@ export function StatusBadge({ className }: { className?: string }) {
   let dot = "bg-muted";
   let tone = "text-ink-2";
   if (data) {
-    text = data.is_synthetic ? "Synthetic Dataset" : `Live Dataset (${data.source})`;
-    dot = data.is_synthetic ? "bg-[#c98a00]" : "bg-good-ink";
-    tone = data.is_synthetic ? "text-amber-ink" : "text-good-ink";
+    const source = describeDataSource(data);
+    text = source.badge;
+    dot = source.synthetic ? "bg-[#c98a00]" : "bg-accent";
+    tone = source.synthetic ? "text-amber-ink" : "text-ink-2";
   } else if (!loading && error) {
     text = "Backend unavailable";
     dot = "bg-danger-ink";

@@ -1,6 +1,7 @@
 "use client";
 import { useDataset } from "./useDataset";
 import { StatusBadge } from "./StatusBadge";
+import { describeDataSource } from "@/lib/dataSource";
 import { formatDate } from "@/lib/utils";
 
 export function SidebarStatus() {
@@ -9,7 +10,7 @@ export function SidebarStatus() {
     <div className="border-t border-line p-4 text-sm">
       <div className="mb-1 text-muted">Data source</div>
       <StatusBadge />
-      <p className="mt-2 text-ink-2">Synthetic Research Dataset</p>
+      {data && <p className="mt-2 text-ink-2">{describeDataSource(data).label}</p>}
       {loading && <p className="mt-1 text-muted">Loading dataset...</p>}
       {data && (
         <p className="num mt-1 text-muted">

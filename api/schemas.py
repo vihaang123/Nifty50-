@@ -31,20 +31,31 @@ class ErrorResponse(BaseModel):
 
 
 # ----------------------------------------------------------------------------- health, dataset, universe
+class DataHealth(BaseModel):
+    provider: str = Field(description="The configured data provider, e.g. 'local'")
+    available: bool = Field(description="True when the provider can supply data right now")
+    is_synthetic: Optional[bool] = Field(None, description="True for generated development data. Null when the data is unavailable")
+    message: Optional[str] = Field(None, description="Why the data is unavailable. Never contains paths or credentials")
+
+
 class HealthResponse(BaseModel):
-    status: Literal["ok"]
+    status: Literal["ok", "degraded"] = Field(description="'ok' when the API and its data are ready, 'degraded' when the API is up but the data is not")
     service: str
     version: str
+    environment: Literal["development", "production"]
+    data: DataHealth
 
 
 class DatasetResponse(BaseModel):
-    source: str = Field(description="'synthetic' for the development data, otherwise 'local'")
+    provider: str = Field(description="The data provider that supplied the prices: 'local' now, 'angel_one' from Phase 8E")
+    source: str = Field(description="'synthetic' for the development data, otherwise the provider name")
     is_synthetic: bool = Field(description="True while the data is the generated development data, not real market prices")
     start_date: str
     end_date: str
     stock_count: int
     stocks: list[str]
     trading_days: int
+    observations: int = Field(description="Number of stock-day price rows loaded (before the feature warm-up rows are removed)")
     market_index: str = Field(description="Name of the benchmark series in the data")
     notice: str
 

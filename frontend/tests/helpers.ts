@@ -2,15 +2,17 @@ import { vi } from "vitest";
 import backtest from "./fixtures/backtest.json";
 import basket from "./fixtures/basket.json";
 import dataset from "./fixtures/dataset.json";
+import health from "./fixtures/health.json";
 import lda from "./fixtures/lda.json";
 import pca from "./fixtures/pca.json";
 import similarity from "./fixtures/similarity.json";
 import universe from "./fixtures/universe.json";
-import type { BacktestResponse, BasketResponse, DatasetResponse, LdaResponse, PcaResponse, SimilarityResponse, UniverseResponse } from "@/lib/types";
+import type { BacktestResponse, BasketResponse, DatasetResponse, HealthResponse, LdaResponse, PcaResponse, SimilarityResponse, UniverseResponse } from "@/lib/types";
 
 // The fixtures are real responses captured from the FastAPI backend (not hand-written numbers).
 export const fx = {
   dataset: dataset as DatasetResponse,
+  health: health as HealthResponse,
   universe: universe as UniverseResponse,
   pca: pca as unknown as PcaResponse,
   lda: lda as unknown as LdaResponse,
@@ -40,7 +42,7 @@ export function mockFetch(...handlers: Handler[]) {
     if (p.startsWith("/api/similarity/")) return json(fx.similarity);
     if (p === "/api/basket/generate") return json(fx.basket);
     if (p === "/api/backtest") return json(fx.backtest);
-    if (p === "/api/health") return json({ status: "ok", service: "stock-basket-api", version: "1.0.0" });
+    if (p === "/api/health") return json(fx.health);
     return apiError(404, "not_found", "Route not found.");
   });
   vi.stubGlobal("fetch", fn);

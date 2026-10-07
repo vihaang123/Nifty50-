@@ -1,13 +1,15 @@
 # Project settings. Paths are relative to this file's folder.
 
 data:
-  # Which data source to use.
-  #   local    -> reads a CSV/Parquet file (works now)
-  #   angelone -> Angel One SmartAPI (added in Phase 10, not implemented yet)
+  # Which data source to use. The API can override this with the DATA_PROVIDER environment variable.
+  #   local     -> reads a CSV/Parquet file (works now, the default)
+  #   angel_one -> Angel One SmartAPI (planned for Phase 8E; selecting it now gives a clear "not implemented" error)
+  # No credentials belong in this file.
   provider: local
 
   # Development dataset. IT IS SYNTHETIC (random numbers, not real prices).
   # Replace these two paths with real data files whenever you have them.
+  # The API can point prices_file somewhere else with the DATA_PATH environment variable.
   prices_file: data/raw/dev_prices_synthetic.csv
   market_index_file: data/raw/dev_market_index_synthetic.csv
 

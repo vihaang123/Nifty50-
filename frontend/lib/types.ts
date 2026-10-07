@@ -20,13 +20,25 @@ export interface ErrorResponse {
 }
 
 // ---- health, dataset, universe ---------------------------------------------
+export interface DataHealth {
+  provider: string;
+  available: boolean;
+  is_synthetic: boolean | null;
+  message: string | null;
+}
+
 export interface HealthResponse {
-  status: "ok";
+  /** "ok" when the API and its data are ready, "degraded" when the API is up but the data provider is not. */
+  status: "ok" | "degraded";
   service: string;
   version: string;
+  environment: "development" | "production";
+  data: DataHealth;
 }
 
 export interface DatasetResponse {
+  /** The data provider: "local" today, "angel_one" from Phase 8E. */
+  provider: string;
   source: string;
   is_synthetic: boolean;
   start_date: string;
@@ -34,6 +46,8 @@ export interface DatasetResponse {
   stock_count: number;
   stocks: string[];
   trading_days: number;
+  /** Stock-day price rows loaded (before the feature warm-up rows are removed). */
+  observations: number;
   market_index: string;
   notice: string;
 }

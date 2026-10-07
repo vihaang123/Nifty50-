@@ -9,12 +9,18 @@ Two modes, always reported in the response:
   * "walk_forward": the backtest endpoint, which refits at every rebalance using only earlier data.
 
 Caching: the loaded data and the fitted exploratory models are kept in memory (functools.lru_cache), because they
-never change while the server runs. There is no other cache. `clear_caches()` resets it. The backtest is not cached.
+never change while the server runs. Every cache is keyed by a `DataSource` (config file + data provider + data path), so a
+different provider or data file can never be served from an object built on other data. There is no other cache.
+`clear_caches()` resets it. The backtest is not cached.
+
+Data problems (wrong provider, provider not built yet, missing or invalid data) are translated into 503 responses whose
+messages are safe to show: they never contain file-system paths or tracebacks (the detail goes to the server log).
 """
 
 from __future__ import annotations
 
 import functools
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,9 +28,20 @@ import pandas as pd
 
 from api.errors import ApiError
 from api.serialization import to_jsonable
+from api.source import DataSource
 from src.backtest import ASSUMPTIONS, GENERAL_NOTICE, SYNTHETIC_NOTICE, run_backtest
 from src.basket import basket_statistics, generate_basket, stock_behaviour
-from src.data_loader import LocalDataProvider, get_provider, load_config
+from src.data_loader import (
+    DataProvider,
+    DataUnavailableError,
+    DataValidationError,
+    LocalDataProvider,
+    ProviderConfigurationError,
+    ProviderNotImplementedError,
+    get_provider,
+    load_config,
+    normalize_provider_name,
+)
 from src.features import build_features, clean_feature_data
 from src.labels import CLASS_NAMES, create_behavior_labels, fit_label_rules
 from src.lda_model import classification_diagnostics, fit_lda, get_lda_explained_variance, get_lda_loadings, transform_lda
@@ -41,6 +58,7 @@ EXPLORATORY_NOTICE = (
 SYNTHETIC_DATA_NOTICE = "The development data is synthetic (generated numbers, not real prices). Do not read it as real market behaviour."
 REAL_DATA_NOTICE = "Historical data supplied to the project. Not investment advice."
 DEFAULT_PCA_COMPONENTS = 5
+logger = logging.getLogger("stock-basket-api")
 
 
 # ---------------------------------------------------------------------------
@@ -53,21 +71,57 @@ class Dataset:
     market: pd.DataFrame
     features: pd.DataFrame
     synthetic: bool
+    provider: str  # the provider that supplied the stock prices, e.g. "local"
+
+
+def _unavailable(code: str, message: str) -> ApiError:
+    return ApiError(503, code, message)
+
+
+def build_provider(source: DataSource, config: dict | None = None) -> DataProvider:
+    """The one place the API builds a data provider. Configuration problems become clear 503 errors, never a silent fallback."""
+    path = Path(source.config_path)
+    try:
+        config = config if config is not None else load_config(path)
+        return get_provider(config, base_dir=path.parent, provider=source.provider, data_path=source.data_path)
+    except ProviderNotImplementedError as error:
+        raise _unavailable("data_provider_not_implemented", str(error)) from error
+    except ProviderConfigurationError as error:
+        raise _unavailable("data_provider_not_configured", str(error)) from error
+
+
+def ensure_provider_ready(source: DataSource) -> DataProvider:
+    """Builds the provider and checks, cheaply, that it can supply data. Does not load or parse the data."""
+    provider = build_provider(source)
+    try:
+        provider.check_available()
+    except DataUnavailableError as error:
+        raise _unavailable("data_unavailable", str(error)) from error
+    return provider
 
 
 @functools.lru_cache(maxsize=4)
-def get_dataset(config_path: str) -> Dataset:
-    path = Path(config_path)
+def get_dataset(source: DataSource) -> Dataset:
+    path = Path(source.config_path)
     config = load_config(path)
     base_dir = path.parent
     data_cfg = config["data"]
     window = {"start": data_cfg.get("start_date"), "end": data_cfg.get("end_date")}
-    provider = get_provider(config, base_dir=base_dir)
-    stocks = provider.get_historical_data(symbols=data_cfg.get("symbols"), **window)
-    market = LocalDataProvider(base_dir / data_cfg["market_index_file"]).get_historical_data(**window)
+    provider = build_provider(source, config)
+    try:
+        stocks = provider.get_historical_data(symbols=data_cfg.get("symbols"), **window)
+        market = LocalDataProvider(base_dir / data_cfg["market_index_file"]).get_historical_data(**window)
+    except FileNotFoundError as error:
+        logger.error("Data file not found: %s", error)
+        raise _unavailable("data_unavailable", "The configured price data could not be found.") from error
+    except DataValidationError as error:
+        logger.error("Data validation failed: %s", error)
+        raise _unavailable("data_invalid", "The configured price data failed validation, so it was not used.") from error
+    except ValueError as error:  # unknown symbol in config.yaml, unsupported file type, nothing left in the date window
+        logger.error("Data could not be loaded: %s", error)
+        raise _unavailable("data_unavailable", "The configured price data could not be loaded with the current settings.") from error
     features = clean_feature_data(build_features(stocks, market))
-    synthetic = "synthetic" in str(data_cfg.get("prices_file", "")).lower()
-    return Dataset(config=config, stocks=stocks, market=market, features=features, synthetic=synthetic)
+    return Dataset(config=config, stocks=stocks, market=market, features=features, synthetic=bool(provider.is_synthetic), provider=provider.name)
 
 
 @dataclass(frozen=True)
@@ -77,8 +131,8 @@ class PcaBundle:
 
 
 @functools.lru_cache(maxsize=16)
-def get_pca(config_path: str, n_components: int) -> PcaBundle:
-    features = get_dataset(config_path).features
+def get_pca(source: DataSource, n_components: int) -> PcaBundle:
+    features = get_dataset(source).features
     model = fit_pca(features, n_components)
     return PcaBundle(model=model, scores=transform_pca(features, model))
 
@@ -92,8 +146,8 @@ class LdaBundle:
 
 
 @functools.lru_cache(maxsize=4)
-def get_lda(config_path: str) -> LdaBundle:
-    features = get_dataset(config_path).features
+def get_lda(source: DataSource) -> LdaBundle:
+    features = get_dataset(source).features
     rules = fit_label_rules(features)
     labels = create_behavior_labels(features, rules)
     model = fit_lda(features, labels)
@@ -107,9 +161,9 @@ class SimilarityBundle:
 
 
 @functools.lru_cache(maxsize=4)
-def get_similarity(config_path: str) -> SimilarityBundle:
-    n = int(get_dataset(config_path).config.get("pca", {}).get("n_components", DEFAULT_PCA_COMPONENTS))
-    profiles = create_stock_profiles(get_pca(config_path, n).scores)
+def get_similarity(source: DataSource) -> SimilarityBundle:
+    n = int(get_dataset(source).config.get("pca", {}).get("n_components", DEFAULT_PCA_COMPONENTS))
+    profiles = create_stock_profiles(get_pca(source, n).scores)
     return SimilarityBundle(profiles=profiles, matrix=calculate_similarity(profiles))
 
 
@@ -125,25 +179,28 @@ def _data_notice(synthetic: bool) -> str:
 # ---------------------------------------------------------------------------
 # Dataset and universe
 # ---------------------------------------------------------------------------
-def dataset_info(config_path: str) -> dict:
-    data = get_dataset(config_path)
+def dataset_info(source: DataSource) -> dict:
+    data = get_dataset(source)
     stocks = data.stocks
     return to_jsonable(
         {
-            "source": "synthetic" if data.synthetic else "local",
+            "provider": data.provider,
+            "source": "synthetic" if data.synthetic else data.provider,
             "is_synthetic": data.synthetic,
             "start_date": stocks["date"].min(),
             "end_date": stocks["date"].max(),
             "stock_count": int(stocks["symbol"].nunique()),
             "stocks": sorted(stocks["symbol"].astype(str).unique()),
             "trading_days": int(stocks["date"].nunique()),
+            "observations": int(len(stocks)),
             "market_index": str(data.market["symbol"].iloc[0]),
             "notice": _data_notice(data.synthetic),
         }
     )
 
 
-def universe_info(config_path: str) -> dict:
+def universe_info(source: DataSource) -> dict:
+    ensure_provider_ready(source)  # a misconfigured provider fails here too, instead of answering from the development list
     universe = get_development_universe()
     counts = universe["cap_category"].value_counts().reindex(CAP_CATEGORIES, fill_value=0)
     return to_jsonable(
@@ -154,6 +211,27 @@ def universe_info(config_path: str) -> dict:
             "notice": DEVELOPMENT_NOTICE,
         }
     )
+
+
+def data_status(source: DataSource) -> dict:
+    """What /api/health reports about the data: provider name and whether it can currently supply data.
+
+    Cheap on purpose (no parsing, no model fitting) and safe to show: the messages never contain paths or credentials.
+    """
+    try:
+        provider = ensure_provider_ready(source)
+    except ApiError as error:
+        shown = normalize_provider_name(source.provider) or _config_provider_name(source)
+        shown = shown if len(shown) <= 40 else shown[:40] + "..."
+        return {"provider": shown, "available": False, "is_synthetic": None, "message": error.message}
+    return {"provider": provider.name, "available": True, "is_synthetic": bool(provider.is_synthetic), "message": None}
+
+
+def _config_provider_name(source: DataSource) -> str:
+    try:
+        return normalize_provider_name(load_config(Path(source.config_path))["data"].get("provider")) or "local"
+    except Exception:  # an unreadable config must not break the health check
+        return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -167,11 +245,11 @@ def _sample(table: pd.DataFrame, max_points: int) -> pd.DataFrame:
     return sample_for_plot(table, max_points=max_points, seed=0).sort_values(["date", "symbol"]).reset_index(drop=True)
 
 
-def pca_analysis(config_path: str, n_components: int | None, max_points: int) -> dict:
-    data = get_dataset(config_path)
+def pca_analysis(source: DataSource, n_components: int | None, max_points: int) -> dict:
+    data = get_dataset(source)
     n = n_components or int(data.config.get("pca", {}).get("n_components", DEFAULT_PCA_COMPONENTS))
     try:
-        bundle = get_pca(config_path, n)
+        bundle = get_pca(source, n)
     except ValueError as error:
         raise ApiError(400, "invalid_components", str(error)) from error
     model, variance = bundle.model, get_explained_variance(bundle.model)
@@ -197,9 +275,9 @@ def pca_analysis(config_path: str, n_components: int | None, max_points: int) ->
     )
 
 
-def lda_analysis(config_path: str, max_points: int) -> dict:
-    data = get_dataset(config_path)
-    bundle = get_lda(config_path)
+def lda_analysis(source: DataSource, max_points: int) -> dict:
+    data = get_dataset(source)
+    bundle = get_lda(source)
     counts = bundle.diagnostics["counts"]
     total = int(counts.sum())
     sample = _sample(bundle.output, max_points)
@@ -228,14 +306,14 @@ def lda_analysis(config_path: str, max_points: int) -> dict:
 # ---------------------------------------------------------------------------
 # Similarity
 # ---------------------------------------------------------------------------
-def similar_stocks(config_path: str, symbol: str, top_n: int) -> dict:
-    data = get_dataset(config_path)
-    bundle = get_similarity(config_path)
+def similar_stocks(source: DataSource, symbol: str, top_n: int) -> dict:
+    data = get_dataset(source)
+    bundle = get_similarity(source)
     if symbol not in bundle.matrix.index:
         raise ApiError(404, "unknown_symbol", f"Unknown stock symbol '{symbol}'. Available symbols: {', '.join(bundle.matrix.index)}.")
     found = find_similar_stocks(bundle.profiles, symbol, top_n)
     caps = get_development_universe().set_index("symbol")["cap_category"]
-    behaviour = stock_behaviour(get_lda(config_path).output)["behavior_class"]
+    behaviour = stock_behaviour(get_lda(source).output)["behavior_class"]
 
     def describe(name: str) -> dict:
         return {
@@ -263,9 +341,9 @@ def _distribution(counts: pd.Series, percent: pd.Series) -> dict:
     return {str(name): {"count": int(counts[name]), "percentage": float(percent[name])} for name in counts.index}
 
 
-def generate_basket_response(config_path: str, capital: float, basket_size: int, similarity_threshold: float) -> dict:
-    data = get_dataset(config_path)
-    lda, similarity = get_lda(config_path), get_similarity(config_path)
+def generate_basket_response(source: DataSource, capital: float, basket_size: int, similarity_threshold: float) -> dict:
+    data = get_dataset(source)
+    lda, similarity = get_lda(source), get_similarity(source)
     universe = get_development_universe()
     eligible = set(universe["symbol"]) & set(lda.output["symbol"].astype(str)) & set(similarity.matrix.index.astype(str))
     if basket_size > len(eligible):
@@ -306,8 +384,8 @@ def generate_basket_response(config_path: str, capital: float, basket_size: int,
 # ---------------------------------------------------------------------------
 # Backtest
 # ---------------------------------------------------------------------------
-def run_backtest_response(config_path: str, request: dict) -> dict:
-    data = get_dataset(config_path)
+def run_backtest_response(source: DataSource, request: dict) -> dict:
+    data = get_dataset(source)
     cfg = data.config.get("backtest", {})
     universe = get_development_universe()
     available = len(set(universe["symbol"]) & set(data.stocks["symbol"].astype(str)))
