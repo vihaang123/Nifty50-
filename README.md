@@ -9,7 +9,7 @@ We do **not** predict prices, generate buy/sell signals, or give financial advic
 ## Pipeline
 
 ```
-Historical data -> Features -> PCA -> LDA -> Similarity -> Selection -> Basket -> Backtest -> API / Dashboard (later)
+Historical data -> Features -> PCA -> LDA -> Similarity -> Selection -> Basket -> Backtest -> FastAPI -> Next.js dashboard
 ```
 
 ## Progress
@@ -21,12 +21,95 @@ Historical data -> Features -> PCA -> LDA -> Similarity -> Selection -> Basket -
 - [x] Phase 5: stock similarity
 - [x] Phase 6: basket construction
 - [x] Phase 7: walk-forward backtesting
-- [x] Phase 8A: backend API (FastAPI)
-- [x] Phase 8B: Next.js / React frontend
-- [ ] Phase 8C: connect frontend to backend
-- [ ] Phase 8D: production deployment (Vercel + hosted API)
-- [ ] Phase 8E: Angel One integration (backend only)
+- [x] Phase 8A: FastAPI backend
+- [x] Phase 8B: Next.js frontend
+- [x] Phase 8C: Production deployment and integration
+- [ ] Phase 8D: Production hardening / next deployment phase
+- [ ] Phase 8E: Angel One / live market data integration
 - [ ] Phase 9: testing and cleanup
+
+Phase 8C is frozen: this repository's `main` branch is the source of truth for what is deployed.
+
+## Production deployment (Phase 8C)
+
+| Part | Technology | Hosted on | URL |
+|---|---|---|---|
+| Frontend | Next.js (App Router, React, TypeScript) | Vercel | https://nifty50-frontend.vercel.app |
+| Backend | FastAPI (Python) | Vercel | https://nifty50-api.vercel.app |
+
+Both are separate Vercel projects built from this one repository. The frontend is a presentation layer: it calls the backend and draws the result. All PCA, LDA, similarity, basket and backtest work happens in the existing Python research engine (`src/`) behind the API.
+
+- **Current data source: Synthetic Research Dataset.** Every number in the deployed app comes from simulated prices (10 tickers, 2018 to 2025). It says nothing about real companies or real markets, and the UI labels it as synthetic.
+- **Angel One integration: not yet implemented.** There is no live market data, no broker connection, no orders, no authentication and no database.
+- This is a research and educational project. It is not a live trading system, does not predict prices and is not financial advice.
+
+### Architecture
+
+```
+User
+  |
+Next.js Frontend            (frontend/, Vercel)
+  |  HTTPS, JSON
+Vercel
+  |
+FastAPI                     (api/, entry point index.py, Vercel)
+  |
+Existing Python Research Engine   (src/, unchanged since Phase 7)
+  |
+Features
+  |
+PCA / LDA
+  |
+Behavioural Similarity
+  |
+Basket Construction
+  |
+Walk-Forward Backtesting
+```
+
+The data source feeding the engine is currently the synthetic dataset in `data/raw/`.
+
+### Vercel project settings
+
+| | Frontend project (`nifty50-frontend`) | Backend project (`nifty50-api`) |
+|---|---|---|
+| Git repository | `vihaang123/Nifty50-`, branch `main` | same |
+| Root Directory | `frontend` | `.` (repository root) |
+| Framework | Next.js | FastAPI |
+| Entry point | Next.js app in `frontend/app/` | `index.py`, which exposes `api.main:app` |
+| Python version | not used | `.python-version` (3.13) |
+| Dependencies | `frontend/package.json` | `requirements.txt` (runtime only) |
+
+`.vercelignore` keeps tests, notebooks and generated files out of the backend bundle. It must **not** list `frontend/`: the frontend project builds from that folder, and hiding it breaks the frontend build.
+
+### Environment variables
+
+Set these in each Vercel project's settings. They are never committed, and the frontend never holds a secret.
+
+| Project | Variable | Production value |
+|---|---|---|
+| Frontend | `NEXT_PUBLIC_API_URL` | `https://nifty50-api.vercel.app` |
+| Backend | `ENVIRONMENT` | `production` |
+| Backend | `FRONTEND_ORIGIN` | `https://nifty50-frontend.vercel.app` |
+
+`NEXT_PUBLIC_API_URL` is read at build time, so changing it needs a frontend redeploy. In production the backend refuses a wildcard origin and will not start without `FRONTEND_ORIGIN`. If the frontend moves to another domain, update `FRONTEND_ORIGIN` to that exact origin (no trailing slash) and redeploy the backend. For local development use the values in `.env.example` and `frontend/.env.example`.
+
+### Requirements files
+
+| File | Contains | Use it for |
+|---|---|---|
+| `requirements.txt` | runtime packages only (pandas, numpy, pyyaml, scikit-learn, matplotlib, fastapi, uvicorn) | the deployed API, or running the API locally |
+| `requirements-dev.txt` | `-r requirements.txt` plus pytest, httpx, pyarrow | running the test suite and working on the code |
+
+Vercel installs `requirements.txt` only. `uvicorn` stays in it because it is how the API is run locally; the other test-only packages are kept out of the deployment.
+
+### Known limitations of the deployment
+
+- The data is synthetic and the benchmark is a synthetic market index.
+- A full backtest takes about 13 to 20 seconds, and the first request after idle time is slower (serverless cold start).
+- CORS allows only the exact frontend origin above, so a custom domain needs a `FRONTEND_ORIGIN` update.
+- Vercel's team-scoped preview URLs are behind Vercel Authentication; the two production URLs above are public.
+- Light theme only.
 
 ## Quick start
 
@@ -52,9 +135,15 @@ data/raw/          input price files (CSV or Parquet)
 data/processed/    files produced by later phases (git-ignored)
 src/               the research engine, one file per pipeline step
 api/               the FastAPI web layer over src/ (Phase 8A)
+frontend/          the Next.js / React app (Phase 8B)
+index.py           Vercel entry point for the API (exposes api.main:app)
 tests/             automated tests
 notebooks/         exploration
 config.yaml        settings (data file paths, provider, date window)
+requirements.txt   runtime dependencies (what the deployed API installs)
+requirements-dev.txt  runtime plus test dependencies
+.python-version    Python version used on Vercel
+.vercelignore      files kept out of the backend deployment bundle
 .env.example       API settings (allowed origin) and empty Angel One placeholders
 ```
 
@@ -630,7 +719,7 @@ Future production architecture (NOT implemented)
 Angel One SmartAPI -> FastAPI backend -> ML / basket / backtest engine -> JSON API -> Next.js / React frontend -> Vercel
 ```
 
-The production frontend and backend are **not** implemented in Phase 7. As of Phase 7 there was no FastAPI app, no Next.js project, no Vercel deployment, no Angel One connection, no authentication and no database (the backend API arrives in Phase 8A below; the rest is still not built). Python stays the engine: the ML and financial pipeline runs in the backend, Angel One credentials live in the backend only, and the frontend never holds API keys, secrets, ML credentials, private keys or database credentials. It only calls the JSON API.
+The production frontend and backend were **not** implemented in Phase 7. As of Phase 7 there was no FastAPI app, no Next.js project, no Vercel deployment, no Angel One connection, no authentication and no database. Since then Phases 8A to 8C added the FastAPI backend, the Next.js frontend and the Vercel deployment; the Angel One connection, authentication and a database are still not built. Python stays the engine: the ML and financial pipeline runs in the backend, Angel One credentials live in the backend only, and the frontend never holds API keys, secrets, ML credentials, private keys or database credentials. It only calls the JSON API.
 
 The code is shaped so that this can be added without a rewrite. The functions return structured data, so the planned screens map onto them:
 
@@ -652,9 +741,9 @@ Phase 8 turns the research project into a web application, step by step:
 |---|---|---|
 | **8A** | **Backend: FastAPI + API contracts** | **done (this section)** |
 | 8B | Frontend: Next.js / React | done (see Phase 8B below) |
-| 8C | Connect the frontend to the backend | not started |
-| 8D | Production deployment (Vercel + hosted API) | not started |
-| 8E | Angel One integration (backend only) | not started |
+| 8C | Production deployment and integration (frontend and backend on Vercel) | done (see Production deployment above) |
+| 8D | Production hardening / next deployment phase | not started |
+| 8E | Angel One / live market data integration (backend only) | not started |
 
 ### How it fits together
 
@@ -733,7 +822,7 @@ The browser origin allowed to call the API comes from the environment, never fro
 
 | Variable | Meaning |
 |---|---|
-| `FRONTEND_ORIGIN` | Allowed origin(s), comma separated. Default `http://localhost:3000`. Later the deployed Vercel domain |
+| `FRONTEND_ORIGIN` | Allowed origin(s), comma separated. Default `http://localhost:3000`. In production: the deployed frontend origin |
 | `ENVIRONMENT` | `development` (default) or `production`. Production refuses `*` and requires `FRONTEND_ORIGIN` to be set |
 | `CONFIG_PATH` | Optional path to a different `config.yaml` |
 
@@ -835,7 +924,7 @@ frontend/
 - The PCA and LDA charts show the sample of points the API returns (default 2,000 of 20,280), not every observation.
 - The PCA scatter cannot colour by all 10 stocks at once (too many hues to tell apart), so it offers cap category or one highlighted stock.
 - The backtest takes 10 to 20 seconds, and the page waits for the response (with a cancel button). There is no background job.
-- Only checked against `http://localhost:3000` and `http://localhost:8000`. No deployment was tested; that is Phase 8D.
+- Built and tested against `http://localhost:3000` and `http://localhost:8000`. The deployed version was verified in Phase 8C (see Production deployment above).
 - No authentication, database or Angel One connection.
 
 ## Switching to Angel One later

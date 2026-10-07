@@ -15,6 +15,16 @@ venv/
 data/processed/*
 !data/processed/.gitkeep
 
+# Frontend build output and test artifacts (frontend/.gitignore also covers these inside frontend/)
+node_modules/
+.next/
+coverage/
+htmlcov/
+
+# Packaged snapshots and temporary files
+*.zip
+screenshots/
+
 # OS / editor
 .DS_Store
 .vscode/
