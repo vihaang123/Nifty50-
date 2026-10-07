@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27        # needed by FastAPI's TestClient
+pyarrow>=15.0      # only needed to read/write Parquet files

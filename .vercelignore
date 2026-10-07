@@ -1,0 +1,5 @@
+frontend/
+tests/
+notebooks/
+data/processed/
+.pytest_cache/

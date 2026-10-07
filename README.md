@@ -31,7 +31,7 @@ Historical data -> Features -> PCA -> LDA -> Similarity -> Selection -> Basket -
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime + tests; the API alone needs only requirements.txt
 
 python -m src.sample_data      # creates the synthetic dev data in data/raw/ (already included)
 python -m src.data_loader      # loads, validates, prints statistics
@@ -742,7 +742,7 @@ Only the listed origins get CORS headers; credentials are off. `.env.example` li
 ### Run it
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime + tests; the API alone needs only requirements.txt
 uvicorn api.main:app --reload          # http://localhost:8000/api/health  and  /docs
 pytest -q tests/api                    # the API tests
 ```
